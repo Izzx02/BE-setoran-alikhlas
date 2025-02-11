@@ -1,21 +1,23 @@
 from flask import Flask, render_template, request, redirect, send_file
-import mysql.connector
-import pandas as pd
+import pymysql
+import openpyxl
 from datetime import datetime
+import os
 
 app = Flask(__name__, template_folder='../frontend', static_folder='../frontend/assets')
 
 # Koneksi ke database
-conn = mysql.connector.connect(
+conn = pymysql.connect(
     host="localhost",
     user="root",
     password="",
-    database="setoran_alikhlas"
+    database="setoran_alikhlas",
+    cursorclass=pymysql.cursors.DictCursor  # ✅ Gunakan DictCursor
 )
 
 @app.route('/')
 def index():
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor()
     cursor.execute("SELECT id, nama FROM santri")
     daftar_santri = cursor.fetchall()
     return render_template('index.html', daftar_santri=daftar_santri)
@@ -51,27 +53,40 @@ def download_excel():
 
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT santri.nama, IFNULL(setoran.jumlah_sholawat, 0) AS jumlah_sholawat
-        FROM santri
-        LEFT JOIN setoran ON santri.id = setoran.santri_id AND setoran.tanggal = CURDATE()
-        ORDER BY santri.id
-    """)
+    SELECT santri.nama, IFNULL(setoran.jumlah_sholawat, 0) AS jumlah_sholawat
+    FROM santri
+    LEFT JOIN setoran ON santri.id = setoran.santri_id
+    ORDER BY santri.id
+""")
+
     data = cursor.fetchall()
 
-    # Buat DataFrame untuk Excel
-    df = pd.DataFrame(data, columns=['Nama', 'Jumlah Sholawat'])
+    # Buat folder 'temp' jika belum ada
+    if not os.path.exists("temp"):
+        os.makedirs("temp")
 
-    # Buat nama file unik berdasarkan waktu
-    filename = f"setoran_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
-    df.to_excel(filename, index=False)
+    # Buat file Excel dengan openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Nama", "Jumlah Sholawat"])  # Header
 
-    return send_file(filename, as_attachment=True, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    for row in data:
+        ws.append([row['nama'], row['jumlah_sholawat']])
 
+    # Simpan di folder 'temp'
+    filename = f"temp/setoran_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
+    wb.save(filename)  
+
+    # Pastikan Flask bisa menemukan file dengan path absolut
+    filepath = os.path.abspath(filename)
+
+    response = send_file(filepath, as_attachment=True, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    # Hapus file setelah dikirim agar tidak menumpuk
+    os.remove(filepath)
+
+    return response
 
 if __name__ == '__main__':
-    app.run(debug=True)
-import os
-
-if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)
